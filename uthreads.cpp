@@ -9,30 +9,81 @@
 #include <setjmp.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <queue>
+#include <iostream>
+
+#define JB_SP 6
+#define JB_PC 7
+
+typedef void(*func)(void);
+typedef unsigned long address_t;
 
 
-UThread threads[MAX_THREAD_NUM];
+/* A translation is required when using an address of a variable.
+   Use this as a black box in your code. */
+address_t translate_address(address_t addr)
+{
+    address_t ret;
+    asm volatile("xor    %%fs:0x30,%0\n"
+		"rol    $0x11,%0\n"
+                 : "=g" (ret)
+                 : "0" (addr));
+    return ret;
+}
+
+class UThread{
+public:
+	int id = -1;
+	int state;
+	char stack[STACK_SIZE];
+	int runningTime = 0;
+	sigjmp_buf env;
+	func f;
+	address_t pc;
+	address_t sp;
+	UThread(){};
+
+	UThread(int id, func f){
+		this->id = id;
+		this->f = f;
+		pc = (address_t)f;
+		sp = (address_t)stack + STACK_SIZE - sizeof(address_t);
+		sigsetjmp(env, 1);
+		(env->__jmpbuf)[JB_SP] = translate_address(sp);
+		(env->__jmpbuf)[JB_PC] = translate_address(pc);
+		sigemptyset(&env->__saved_mask);
+	}
+};
+
+UThread* threads[MAX_THREAD_NUM];
 //sigjmp_buf env[MAX_THREAD_NUM];
-int readyId;
-int blockId[MAX_THREAD_NUM];
+std::queue<int> readyId;
+std::queue<int> blockId;
 int sleepId[MAX_THREAD_NUM];//TODO array or just signals
-int threadsNumbers[MAX_THREAD_NUM];
-
+int runnigId;
 
 
 void timer_handler(int sig)
 {
   printf("Timer expired\n");
-  //TODO do somthing
+  //put the current running thread into the ready queue
+  sigsetjmp(threads[runnigId]->env, 1);
+  //TODO check if needed
+  sigemptyset(&(threads[runnigId]->env)->__saved_mask);
+  readyId.push(runnigId);
+  if(!readyId.empty()){
+	  runnigId = readyId.front();
+	  readyId.pop();
+  }
+  //long jump to runnig id thread
+  siglongjmp((threads[runnigId]->env),1);
 }
 
-void ZeroFunction(int sig)
+void zeroFunction()
 {
-	//TODO change
-//  while(true){
-//
-//  }
-	pause();
+	for(;;){
+		pause();
+	}
 }
 
 /*
@@ -78,7 +129,17 @@ int uthread_init(int quantum_usecs){
  * Return value: On success, return the ID of the created thread.
  * On failure, return -1.
 */
-int uthread_spawn(void (*f)(void));
+int uthread_spawn(void (*f)(void)){
+	for(int index = 0; index < MAX_THREAD_NUM; index++){
+		if(threads[index] == nullptr){
+			//create the new thread
+			UThread* newThread = new UThread(index, f);
+			threads[index] = newThread;
+			return 0;
+		}
+	}
+	return -1;
+}
 
 
 /*
@@ -166,3 +227,6 @@ int uthread_get_total_quantums();
  * Return value: On success, return the number of quantums of the thread with ID tid. On failure, return -1.
 */
 int uthread_get_quantums(int tid);
+
+
+

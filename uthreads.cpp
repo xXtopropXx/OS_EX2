@@ -4,16 +4,21 @@
 
 #include "uthreads.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <signal.h>
 #include <sys/time.h>
 #include <setjmp.h>
 #include <unistd.h>
 #include <sys/time.h>
-#include <queue>
+#include <list>
 #include <iostream>
 
 #define JB_SP 6
 #define JB_PC 7
+#define READY 2
+#define RUNNING 1
+#define SLEEPING 3
+#define BLOCKED 4
 
 typedef void(*func)(void);
 typedef unsigned long address_t;
@@ -46,6 +51,7 @@ public:
 	UThread(int id, func f){
 		this->id = id;
 		this->f = f;
+		this->state = READY;
 		pc = (address_t)f;
 		sp = (address_t)stack + STACK_SIZE - sizeof(address_t);
 		sigsetjmp(env, 1);
@@ -57,32 +63,77 @@ public:
 
 UThread* threads[MAX_THREAD_NUM];
 //sigjmp_buf env[MAX_THREAD_NUM];
-std::queue<int> readyId;
-std::queue<int> blockId;
-int sleepId[MAX_THREAD_NUM];//TODO array or just signals
-int runnigId;
+std::list<int> readyId;
+std::list<int> blockId;
+std::list<int> sleepId;
+int runningId;
+int totalQuantums = 0;
 
 
 void timer_handler(int sig)
 {
   printf("Timer expired\n");
   //put the current running thread into the ready queue
-  sigsetjmp(threads[runnigId]->env, 1);
+  sigsetjmp(threads[runningId]->env, 1);
   //TODO check if needed
-  sigemptyset(&(threads[runnigId]->env)->__saved_mask);
-  readyId.push(runnigId);
+  sigemptyset(&(threads[runningId]->env)->__saved_mask);
+  readyId.push_back(runningId);
   if(!readyId.empty()){
-	  runnigId = readyId.front();
-	  readyId.pop();
+	  runningId = readyId.front();
+	  readyId.pop_front();
   }
   //long jump to runnig id thread
-  siglongjmp((threads[runnigId]->env),1);
+  siglongjmp((threads[runningId]->env),1);
 }
 
 void zeroFunction()
 {
 	for(;;){
 		pause();
+	}
+}
+
+void eraseFromList(std::list<int>& list, int id){
+	std::list<int>::iterator it;
+	it = list.begin();
+	for(; it != list.end(); it++){
+		if(*it == id){
+			list.erase(it);
+			return;
+		}
+	}
+}
+
+void deleteThread(int tid, bool deleteAll){
+	if(threads[tid]->state == RUNNING){
+		eraseFromList(readyId, tid);
+		delete threads[tid];
+		threads[tid] = nullptr;
+		if(!deleteAll){
+			runningId = 0;
+			siglongjmp((threads[0]->env),1);
+		}
+		return;
+	}
+	else if(threads[tid]->state == BLOCKED){
+		eraseFromList(blockId, tid);
+	}
+	else if(threads[tid]->state == SLEEPING){
+		eraseFromList(sleepId, tid);
+	}
+	else if(threads[tid]->state == READY){
+		eraseFromList(readyId, tid);
+	}
+	delete threads[tid];
+	threads[tid] = nullptr;
+}
+
+void deleteAllThreads(){
+	int i = 0;
+	for(; i < MAX_THREAD_NUM; i++){
+		if(threads[i] != nullptr){
+			deleteThread(i, true);
+		}
 	}
 }
 
@@ -130,13 +181,20 @@ int uthread_init(int quantum_usecs){
  * On failure, return -1.
 */
 int uthread_spawn(void (*f)(void)){
-	for(int index = 0; index < MAX_THREAD_NUM; index++){
-		if(threads[index] == nullptr){
-			//create the new thread
-			UThread* newThread = new UThread(index, f);
-			threads[index] = newThread;
-			return 0;
+	try{
+		for(int index = 0; index < MAX_THREAD_NUM; index++){
+			if(threads[index] == nullptr){
+				//create the new thread
+				UThread* newThread = new UThread(index, f);
+				threads[index] = newThread;
+				readyId.push_back(index);
+
+				return index;
+			}
 		}
+	}
+	catch(...){
+		return -1;
 	}
 	return -1;
 }
@@ -153,7 +211,17 @@ int uthread_spawn(void (*f)(void)){
  * terminated and -1 otherwise. If a thread terminates itself or the main
  * thread is terminated, the function does not return.
 */
-int uthread_terminate(int tid);
+int uthread_terminate(int tid){
+	if(threads[tid] != nullptr){
+		return -1;
+	}
+	else if(tid == 0){
+		deleteAllThreads();
+		exit(0);
+	}
+	deleteThread(tid, false);
+	return 0;
+}
 
 
 /*
@@ -165,7 +233,31 @@ int uthread_terminate(int tid);
  * effect and is not considered as an error.
  * Return value: On success, return 0. On failure, return -1.
 */
-int uthread_block(int tid);
+int uthread_block(int tid){
+	if (tid == 0){
+		return -1;
+	}
+	else if(threads[tid] == nullptr)
+	{
+		return -1;
+	}
+	else if(threads[tid]->state == BLOCKED || threads[tid]->state == SLEEPING){
+		return 0;
+	}
+	else if(tid == runningId){
+		int ret = sigsetjmp(threads[runningId]->env, 1);
+		if(ret == 1){
+			return 0;
+		}
+		runningId = 0;
+		siglongjmp((threads[0]->env),1);
+		return 0;
+	}
+	eraseFromList(readyId, tid);
+	blockId.push_back(tid);
+	threads[tid]->state = BLOCKED;
+	return 0;
+}
 
 
 /*
@@ -175,7 +267,17 @@ int uthread_block(int tid);
  * ID tid exists it is considered as an error.
  * Return value: On success, return 0. On failure, return -1.
 */
-int uthread_resume(int tid);
+int uthread_resume(int tid){
+	if(threads[tid] == nullptr){
+		return -1;
+	}
+	if(threads[tid]->state == BLOCKED){
+		eraseFromList(blockId, tid);
+		readyId.push_back(tid);
+		threads[tid]->state = READY;
+	}
+	return 0;
+}
 
 
 /*
@@ -203,7 +305,9 @@ int uthread_get_time_until_wakeup(int tid);
  * Description: This function returns the thread ID of the calling thread.
  * Return value: The ID of the calling thread.
 */
-int uthread_get_tid();
+int uthread_get_tid(){
+	return runningId;
+}
 
 
 /*
@@ -214,7 +318,9 @@ int uthread_get_tid();
  * should be increased by 1.
  * Return value: The total number of quantums.
 */
-int uthread_get_total_quantums();
+int uthread_get_total_quantums(){
+	return totalQuantums;
+}
 
 
 /*
@@ -226,7 +332,12 @@ int uthread_get_total_quantums();
  * thread with ID tid exists it is considered as an error.
  * Return value: On success, return the number of quantums of the thread with ID tid. On failure, return -1.
 */
-int uthread_get_quantums(int tid);
+int uthread_get_quantums(int tid){
+	if(threads[tid] != nullptr){
+		return threads[tid]->runningTime;
+	}
+	return -1;
+}
 
 
 

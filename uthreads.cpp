@@ -19,10 +19,10 @@
 #define RUNNING 1
 #define SLEEPING 3
 #define BLOCKED 4
+#define SEC_TO_USEC 1000000
 
 typedef void(*func)(void);
 typedef unsigned long address_t;
-
 
 /* A translation is required when using an address of a variable.
    Use this as a black box in your code. */
@@ -42,11 +42,16 @@ public:
 	int state;
 	char stack[STACK_SIZE];
 	int runningTime = 0;
+	int remainingSleepQuantum = 0;
 	sigjmp_buf env;
-	func f;
-	address_t pc;
-	address_t sp;
-	UThread(){};
+	func f = nullptr;
+	address_t pc = 0;
+	address_t sp = 0;
+	UThread(){
+		this->id = 0;
+		this->f = nullptr;
+		this->state = READY;
+	}
 
 	UThread(int id, func f){
 		this->id = id;
@@ -70,29 +75,6 @@ int runningId;
 int totalQuantums = 0;
 
 
-void timer_handler(int sig)
-{
-  printf("Timer expired\n");
-  //put the current running thread into the ready queue
-  sigsetjmp(threads[runningId]->env, 1);
-  //TODO check if needed
-  sigemptyset(&(threads[runningId]->env)->__saved_mask);
-  readyId.push_back(runningId);
-  if(!readyId.empty()){
-	  runningId = readyId.front();
-	  readyId.pop_front();
-  }
-  //long jump to runnig id thread
-  siglongjmp((threads[runningId]->env),1);
-}
-
-void zeroFunction()
-{
-	for(;;){
-		pause();
-	}
-}
-
 void eraseFromList(std::list<int>& list, int id){
 	std::list<int>::iterator it;
 	it = list.begin();
@@ -104,7 +86,63 @@ void eraseFromList(std::list<int>& list, int id){
 	}
 }
 
+
+void resetTimer(){
+	struct itimerval time;
+	getitimer(ITIMER_VIRTUAL, &time);
+	time.it_value = time.it_interval;
+	setitimer(ITIMER_VIRTUAL, &time, NULL);
+
+}
+
+
+void timer_handler(int sig){
+
+	//put the current running thread into the ready queue
+	sigsetjmp(threads[runningId]->env, 1);
+
+	struct sigaction ign;
+	struct sigaction oldHandler;
+	ign.sa_handler = SIG_IGN;
+	sigaction(SIGVTALRM, &ign, &oldHandler);
+
+
+	printf("Timer expired\n");
+
+	//TODO check if needed
+	sigemptyset(&(threads[runningId]->env)->__saved_mask);
+	readyId.push_back(runningId);
+	if(!readyId.empty()){
+		runningId = readyId.front();
+		threads[runningId]->state = RUNNING;
+		readyId.pop_front();
+	}
+	std::list<int>::iterator it;
+	it = sleepId.begin();
+  	for(; it != sleepId.end(); it++){
+  		threads[*it]->remainingSleepQuantum--;
+ 		if(threads[*it]->remainingSleepQuantum == 0){
+ 			eraseFromList(sleepId, *it);
+  			readyId.push_back(*it);
+  			threads[*it]->state = READY;
+  		}
+  	}
+  	resetTimer();
+  	sigaction(SIGVTALRM, &oldHandler, NULL);
+  	//long jump to runnig id thread
+  	siglongjmp((threads[runningId]->env),1);
+}
+
+
+
+
 void deleteThread(int tid, bool deleteAll){
+	sigset_t set;
+	//blocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_BLOCK, &set, NULL);
+
 	if(threads[tid]->state == RUNNING){
 		eraseFromList(readyId, tid);
 		delete threads[tid];
@@ -126,6 +164,10 @@ void deleteThread(int tid, bool deleteAll){
 	}
 	delete threads[tid];
 	threads[tid] = nullptr;
+	//unblocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
 }
 
 void deleteAllThreads(){
@@ -137,6 +179,8 @@ void deleteAllThreads(){
 	}
 }
 
+
+
 /*
  * Description: This function initializes the thread library.
  * You may assume that this function is called before any other thread library
@@ -146,6 +190,12 @@ void deleteAllThreads(){
  * Return value: On success, return 0. On failure, return -1.
 */
 int uthread_init(int quantum_usecs){
+	sigset_t set;
+	//blocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_BLOCK, &set, NULL);
+
 	struct sigaction sa;
 	struct itimerval timer;
 
@@ -155,19 +205,37 @@ int uthread_init(int quantum_usecs){
 		printf("sigaction error."); //TODO maybe remove print
 		return -1;
 	}
-
+	int usec = 0;
+	int sec = 0;
+	if(quantum_usecs >= SEC_TO_USEC){
+		usec = quantum_usecs % SEC_TO_USEC;
+		sec = (quantum_usecs - usec)/ SEC_TO_USEC;
+	}
+	// Configure the timer to expire after 1 sec... */
+	timer.it_value.tv_sec = sec;		// first time interval, seconds part
+	timer.it_value.tv_usec = usec;		// first time interval, microseconds part
 	// configure the timer to expire every quantum_usecs in micro-seconds after that.
-	timer.it_interval.tv_sec = 0;	// following time intervals, seconds part
-	timer.it_interval.tv_usec = quantum_usecs;	// following time intervals, microseconds part
+	timer.it_interval.tv_sec = sec;	// following time intervals, seconds part
+	timer.it_interval.tv_usec = usec;	// following time intervals, microseconds part
 
 	// Start a virtual timer. It counts down whenever this process is executing.
 	if (setitimer (ITIMER_VIRTUAL, &timer, NULL)) {
 		printf("setitimer error."); //TODO maybe remove print
 		return -1;
 	}
-	uthread_spawn(zeroFunction);
-	//TODO jump to the zero function
+	UThread* newThread = new UThread();
+	threads[0] = newThread;
+	readyId.push_back(0);
+	sigsetjmp(newThread->env, 1);
+//	(newThread->env->__jmpbuf)[JB_SP] = translate_address(newThread->sp);
+//	(newThread->env->__jmpbuf)[JB_PC] = translate_address(newThread->pc);
+	sigemptyset(&newThread->env->__saved_mask);
 	return 0;
+
+	//unblocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
 }
 
 /*
@@ -181,6 +249,12 @@ int uthread_init(int quantum_usecs){
  * On failure, return -1.
 */
 int uthread_spawn(void (*f)(void)){
+	sigset_t set;
+	//blocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_BLOCK, &set, NULL);
+
 	try{
 		for(int index = 0; index < MAX_THREAD_NUM; index++){
 			if(threads[index] == nullptr){
@@ -197,6 +271,11 @@ int uthread_spawn(void (*f)(void)){
 		return -1;
 	}
 	return -1;
+
+	//unblocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
 }
 
 
@@ -212,6 +291,12 @@ int uthread_spawn(void (*f)(void)){
  * thread is terminated, the function does not return.
 */
 int uthread_terminate(int tid){
+	sigset_t set;
+	//blocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_BLOCK, &set, NULL);
+
 	if(threads[tid] != nullptr){
 		return -1;
 	}
@@ -221,6 +306,11 @@ int uthread_terminate(int tid){
 	}
 	deleteThread(tid, false);
 	return 0;
+
+	//unblocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
 }
 
 
@@ -234,6 +324,12 @@ int uthread_terminate(int tid){
  * Return value: On success, return 0. On failure, return -1.
 */
 int uthread_block(int tid){
+	sigset_t set;
+	//blocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_BLOCK, &set, NULL);
+
 	if (tid == 0){
 		return -1;
 	}
@@ -245,6 +341,8 @@ int uthread_block(int tid){
 		return 0;
 	}
 	else if(tid == runningId){
+		blockId.push_back(tid);
+		threads[tid]->state = BLOCKED;
 		int ret = sigsetjmp(threads[runningId]->env, 1);
 		if(ret == 1){
 			return 0;
@@ -257,6 +355,11 @@ int uthread_block(int tid){
 	blockId.push_back(tid);
 	threads[tid]->state = BLOCKED;
 	return 0;
+
+	//unblocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
 }
 
 
@@ -268,6 +371,12 @@ int uthread_block(int tid){
  * Return value: On success, return 0. On failure, return -1.
 */
 int uthread_resume(int tid){
+	sigset_t set;
+	//blocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_BLOCK, &set, NULL);
+
 	if(threads[tid] == nullptr){
 		return -1;
 	}
@@ -277,6 +386,11 @@ int uthread_resume(int tid){
 		threads[tid]->state = READY;
 	}
 	return 0;
+
+	//unblocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
 }
 
 
@@ -288,7 +402,36 @@ int uthread_resume(int tid){
  * transitions to the SLEEPING state a scheduling decision should be made.
  * Return value: On success, return 0. On failure, return -1.
 */
-int uthread_sleep(int num_quantums);
+int uthread_sleep(int num_quantums){
+	sigset_t set;
+	//blocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_BLOCK, &set, NULL);
+
+	if (runningId == 0){
+		return -1;
+	}
+	blockId.push_back(runningId);
+	threads[runningId]->state = BLOCKED;
+	int ret = sigsetjmp(threads[runningId]->env, 1);
+	if(ret == 1){
+		return 0;
+	}
+
+	//add to the sleeping list
+	threads[runningId]->remainingSleepQuantum = num_quantums;
+	sleepId.push_back(runningId);
+	//jump to the main thread
+	runningId = 0;
+	siglongjmp((threads[0]->env),1);
+	return 0;
+
+	//unblocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
+}
 
 
 /*
@@ -298,7 +441,12 @@ int uthread_sleep(int num_quantums);
  * the function should return 0.
  * Return value: Number of quantums (including current quantum) until wakeup.
 */
-int uthread_get_time_until_wakeup(int tid);
+int uthread_get_time_until_wakeup(int tid){
+	if(threads[tid] != nullptr){
+		return threads[tid]->remainingSleepQuantum;
+	}
+	return -1;
+}
 
 
 /*

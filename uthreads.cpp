@@ -41,7 +41,7 @@ public:
 	int id = -1;
 	int state;
 	char stack[STACK_SIZE];
-	int runningTime = 0;
+	int runningTime = 1;
 	int remainingSleepQuantum = 0;
 	sigjmp_buf env;
 	func f = nullptr;
@@ -71,7 +71,7 @@ UThread* threads[MAX_THREAD_NUM];
 std::list<int> readyId;
 std::list<int> blockId;
 std::list<int> sleepId;
-int runningId;
+int runningId = 0;
 int totalQuantums = 0;
 
 
@@ -100,7 +100,7 @@ void timer_handler(int sig){
 
 	//put the current running thread into the ready queue
 	sigsetjmp(threads[runningId]->env, 1);
-
+	threads[runningId]->runningTime++;
 	struct sigaction ign;
 	struct sigaction oldHandler;
 	ign.sa_handler = SIG_IGN;

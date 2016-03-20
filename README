@@ -1,0 +1,49 @@
+itaygera, nadavost
+Student Itay Gera (208523274), Student Nadav Ostrovsky (206157877)
+EX: 1
+
+FILES:
+osm.c -- The measuring times library c file
+osm.h -- The measuring times library header.
+
+REMARKS:
+
+ANSWERS:
+
+Q1:
+Task 1:
+The WhatIDo program is pretty simple, and it does the following operations:
+It takes one argument of type char, if it gets no arguments or more then one argument it prints
+"The program should receive a single argument. Exiting."
+and afterwards it prints ": Success\n".
+
+If it gets one argument it does the following:
+1.Makes directory Welcome
+2.Makes directory Welcome/To
+3.Creates a file named OS in Welcome/To/
+4.Using fstat() to get information about the file an mapping the file to the memory using mmap().
+5.It writes "If you didn't read the course guidelines..." to the OS file- And we did read it :)
+6.Closes the file and Unmapping the file from memory.
+7.Unlinks the file thus removing it and removes the directories.
+
+
+Q2:
+Task 2:
+the main principle that guided us while writing the code was to start and to stop the time counting
+right before and after the part of the code that should be timed.
+now we will describe important details in the functions:
+1) osm_operation_time - in each loop we preformed 5 different math actions, in order reduce weight
+ of the loop itself,
+and they were different from each other, to avoid, optimizations that the computer might preform.
+2) osm_function_time - like the previous function also in this one, in each loop we preformed
+ 5 calls of the empty function,
+in order reduce weight of the loop itself.
+3) osm_disk_time - we preformed the operations: fopen, fputs, fflush, fclose. we choose to
+ use this certain sequence,
+in order to make each operation and iteration independent from one another.
+this is a tipical run that we had performed over our own computer:
+instruction: 0.600000, function: 1.800000, trap: 233.000000, disk: 27714.500000.
+we can see here that the simple operations, like calling a function, is very fast. but the
+ last two operations, trap and disk access
+are relatively very slow. It makes sense because they involve a lot of different operations
+ to be completed, or external mechanical actions.

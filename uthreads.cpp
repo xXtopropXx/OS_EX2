@@ -45,6 +45,22 @@ address_t translate_address(address_t addr)
     return ret;
 }
 
+void unBlockSIGVALM(sigset_t& set) {
+	//unblocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
+}
+
+
+void blockSIGVALM(sigset_t& set) {
+	//blocked signals: SIGVTALRM
+	sigemptyset(&set);
+	sigaddset(&set, SIGVTALRM);
+	sigprocmask(SIG_BLOCK, &set, NULL);
+}
+
+
 
 
 class UThread{
@@ -160,11 +176,6 @@ void timer_handler(int sig){
 
 
 void deleteThread(int tid, bool deleteAll){
-	sigset_t set;
-	//blocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_BLOCK, &set, NULL);
 
 	if(threads[tid]->state == RUNNING){
 		eraseFromList(readyId, tid);
@@ -187,10 +198,7 @@ void deleteThread(int tid, bool deleteAll){
 	}
 	delete threads[tid];
 	threads[tid] = nullptr;
-	//unblocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_UNBLOCK, &set, NULL);
+
 }
 
 void deleteAllThreads(){
@@ -266,10 +274,7 @@ int uthread_init(int quantum_usecs){
 */
 int uthread_spawn(void (*f)(void)){
 	sigset_t set;
-	//blocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_BLOCK, &set, NULL);
+	blockSIGVALM(set);
 
 	try{
 		for(int index = 0; index < MAX_THREAD_NUM; index++){
@@ -279,9 +284,7 @@ int uthread_spawn(void (*f)(void)){
 				threads[index] = newThread;
 				readyId.push_back(index);
 			//	std::cout << readyId.size() << std::endl;
-				sigemptyset(&set);
-				sigaddset(&set, SIGVTALRM);
-				sigprocmask(SIG_UNBLOCK, &set, NULL);
+				unBlockSIGVALM(set);
 
 //				print(readyId);
 
@@ -290,13 +293,12 @@ int uthread_spawn(void (*f)(void)){
 		}
 	}
 	catch(...){
+		unBlockSIGVALM(set);
 		return -1;
 	}
 
 	//unblocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_UNBLOCK, &set, NULL);
+	unBlockSIGVALM(set);
 
 	return -1;
 }
@@ -316,11 +318,10 @@ int uthread_spawn(void (*f)(void)){
 int uthread_terminate(int tid){
 	sigset_t set;
 	//blocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_BLOCK, &set, NULL);
+	blockSIGVALM(set);
 
 	if(threads[tid] == nullptr){
+		unBlockSIGVALM(set);
 		return -1;
 	}
 	else if(tid == 0){
@@ -330,11 +331,44 @@ int uthread_terminate(int tid){
 	deleteThread(tid, false);
 
 	//unblocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_UNBLOCK, &set, NULL);
+	unBlockSIGVALM(set);
 
 	return 0;
+}
+
+void blockRunningSchedule(){
+		int ret = sigsetjmp(threads[runningId]->env, 1);
+		if(ret == 1){
+			return;
+		}
+		totalQuantums++;
+
+
+		struct sigaction ign;
+		struct sigaction oldHandler;
+		ign.sa_handler = SIG_IGN;
+		sigaction(SIGVTALRM, &ign, &oldHandler);
+
+		runningId = readyId.front();
+		threads[runningId]->state = RUNNING;
+		readyId.pop_front();
+		std::list<int>::iterator it;
+		it = sleepId.begin();
+	  	for(; it != sleepId.end(); it++){
+	  		threads[*it]->remainingSleepQuantum--;
+	 		if(threads[*it]->remainingSleepQuantum == 0){
+	 			eraseFromList(sleepId, *it);
+	  			readyId.push_back(*it);
+	  			threads[*it]->state = READY;
+	  		}
+	  	}
+		threads[runningId]->runningTime++;
+
+	  	resetTimer();
+	  	sigaction(SIGVTALRM, &oldHandler, NULL);
+
+	  	//long jump to runnig id thread
+	  	siglongjmp((threads[runningId]->env),1);
 }
 
 
@@ -350,18 +384,19 @@ int uthread_terminate(int tid){
 int uthread_block(int tid){
 	sigset_t set;
 	//blocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_BLOCK, &set, NULL);
+	blockSIGVALM(set);
 
 	if (tid == 0){
+		unBlockSIGVALM(set);
 		return -1;
 	}
 	else if(threads[tid] == nullptr)
 	{
+		unBlockSIGVALM(set);
 		return -1;
 	}
 	else if(threads[tid]->state == BLOCKED || threads[tid]->state == SLEEPING){
+		unBlockSIGVALM(set);
 		return 0;
 	}
 	else if(tid == runningId){
@@ -369,21 +404,21 @@ int uthread_block(int tid){
 		threads[tid]->state = BLOCKED;
 		int ret = sigsetjmp(threads[runningId]->env, 1);
 		if(ret == 1){
+			unBlockSIGVALM(set);
 			return 0;
 		}
-		runningId = 0;
-		siglongjmp((threads[0]->env),1);
+
+		unBlockSIGVALM(set);
+		blockRunningSchedule();
 		return 0;
 	}
 	eraseFromList(readyId, tid);
+	print(readyId);
 	blockId.push_back(tid);
 	threads[tid]->state = BLOCKED;
 
 	//unblocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_UNBLOCK, &set, NULL);
-
+	unBlockSIGVALM(set);
 	return 0;
 }
 
@@ -398,11 +433,10 @@ int uthread_block(int tid){
 int uthread_resume(int tid){
 	sigset_t set;
 	//blocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_BLOCK, &set, NULL);
+	blockSIGVALM(set);
 
 	if(threads[tid] == nullptr){
+		unBlockSIGVALM(set);
 		return -1;
 	}
 	if(threads[tid]->state == BLOCKED){
@@ -412,9 +446,7 @@ int uthread_resume(int tid){
 	}
 
 	//unblocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_UNBLOCK, &set, NULL);
+	unBlockSIGVALM(set);
 
 	return 0;
 }
@@ -431,31 +463,25 @@ int uthread_resume(int tid){
 int uthread_sleep(int num_quantums){
 	sigset_t set;
 	//blocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_BLOCK, &set, NULL);
+	blockSIGVALM(set);
 
 	if (runningId == 0){
+		unBlockSIGVALM(set);
 		return -1;
 	}
 	blockId.push_back(runningId);
 	threads[runningId]->state = BLOCKED;
 	int ret = sigsetjmp(threads[runningId]->env, 1);
 	if(ret == 1){
+		unBlockSIGVALM(set);
 		return 0;
 	}
 
 	//add to the sleeping list
 	threads[runningId]->remainingSleepQuantum = num_quantums;
 	sleepId.push_back(runningId);
-	//jump to the main thread
-	runningId = 0;
-	siglongjmp((threads[0]->env),1);
-
-	//unblocked signals: SIGVTALRM
-	sigemptyset(&set);
-	sigaddset(&set, SIGVTALRM);
-	sigprocmask(SIG_UNBLOCK, &set, NULL);
+	unBlockSIGVALM(set);
+	timer_handler(SIGVTALRM);
 
 	return 0;
 }

@@ -126,6 +126,7 @@ void resetTimer(){
 
 
 void timer_handler(int sig){
+	//print(readyId);
 //	std::cout << "entered handler ending thread number:  " <<  runningId << std::endl;
 
 	//put the current running thread into the ready queue
@@ -133,13 +134,34 @@ void timer_handler(int sig){
 	if(ret == 1){
 		return;
 	}
-	totalQuantums++;
+
 
 //	std::cout << "runnig time is: " <<  threads[runningId]->runningTime << std::endl;
 	struct sigaction ign;
 	struct sigaction oldHandler;
 	ign.sa_handler = SIG_IGN;
 	sigaction(SIGVTALRM, &ign, &oldHandler);
+
+	totalQuantums++;
+  	std::list<int>::iterator iter = sleepId.begin();
+  	while (iter != sleepId.end())
+  	{
+
+  	    if (threads[*iter]->remainingSleepQuantum == 0)
+  	    {
+  	    	int toWake = *iter;
+  	        ++iter;
+  	        eraseFromList(sleepId, toWake);  // alternatively, i = items.erase(i);
+  	        readyId.push_back(toWake);
+  	        threads[toWake]->state = READY;
+
+  	    }
+  	    else
+  	    {
+  	  		threads[*iter]->remainingSleepQuantum--;
+  	        ++iter;
+  	    }
+  	}
 
 	//TODO check if needed
 	//sigemptyset(&(threads[runningId]->env)->__saved_mask);
@@ -151,16 +173,8 @@ void timer_handler(int sig){
 	threads[runningId]->state = RUNNING;
 	readyId.pop_front();
 	//std::cout << "size running id:" <<  readyId.size() << std::endl;
-	std::list<int>::iterator it;
-	it = sleepId.begin();
-  	for(; it != sleepId.end(); it++){
-  		threads[*it]->remainingSleepQuantum--;
- 		if(threads[*it]->remainingSleepQuantum == 0){
- 			eraseFromList(sleepId, *it);
-  			readyId.push_back(*it);
-  			threads[*it]->state = READY;
-  		}
-  	}
+
+
 	threads[runningId]->runningTime++;
 
   	resetTimer();
@@ -174,20 +188,54 @@ void timer_handler(int sig){
 
 
 
-
-void deleteThread(int tid, bool deleteAll){
-
-	if(threads[tid]->state == RUNNING){
-		eraseFromList(readyId, tid);
-		delete threads[tid];
-		threads[tid] = nullptr;
-		if(!deleteAll){
-			runningId = 0;
-			siglongjmp((threads[0]->env),1);
+void blockRunningSchedule(){
+		if(threads[runningId] != nullptr){
+			int ret = sigsetjmp(threads[runningId]->env, 1);
+			if(ret == 1){
+				return;
+			}
 		}
-		return;
-	}
-	else if(threads[tid]->state == BLOCKED){
+		struct sigaction ign;
+		struct sigaction oldHandler;
+		ign.sa_handler = SIG_IGN;
+		sigaction(SIGVTALRM, &ign, &oldHandler);
+		totalQuantums++;
+		runningId = readyId.front();
+		threads[runningId]->state = RUNNING;
+		readyId.pop_front();
+
+	  	std::list<int>::iterator iter = sleepId.begin();
+	  	while (iter != sleepId.end())
+	  	{
+
+	  	    if (threads[*iter]->remainingSleepQuantum == 0)
+	  	    {
+	  	    	int toWake = *iter;
+	  	        ++iter;
+	  	        eraseFromList(sleepId, toWake);  // alternatively, i = items.erase(i);
+	  	        readyId.push_back(toWake);
+	  	        threads[toWake]->state = READY;
+
+	  	    }
+	  	    else
+	  	    {
+	  	  		threads[*iter]->remainingSleepQuantum--;
+	  	        ++iter;
+	  	    }
+	  	}
+		threads[runningId]->runningTime++;
+
+	  	resetTimer();
+	  	sigaction(SIGVTALRM, &oldHandler, NULL);
+
+	  	//long jump to runnig id thread
+	  	siglongjmp((threads[runningId]->env),1);
+}
+
+
+void deleteThread(int tid){
+
+	if(threads[tid]->state == BLOCKED){
 		eraseFromList(blockId, tid);
 	}
 	else if(threads[tid]->state == SLEEPING){
@@ -205,7 +253,7 @@ void deleteAllThreads(){
 	int i = 0;
 	for(; i < MAX_THREAD_NUM; i++){
 		if(threads[i] != nullptr){
-			deleteThread(i, true);
+			deleteThread(i);
 		}
 	}
 }
@@ -328,47 +376,19 @@ int uthread_terminate(int tid){
 		deleteAllThreads();
 		exit(0);
 	}
-	deleteThread(tid, false);
+	else if(threads[tid]->state == RUNNING){
+		delete threads[tid];
+		threads[tid] = nullptr;
+		unBlockSIGVALM(set);
+		blockRunningSchedule();
+		return 0;
+	}
+	deleteThread(tid);
 
 	//unblocked signals: SIGVTALRM
 	unBlockSIGVALM(set);
 
 	return 0;
-}
-
-void blockRunningSchedule(){
-		int ret = sigsetjmp(threads[runningId]->env, 1);
-		if(ret == 1){
-			return;
-		}
-		totalQuantums++;
-
-
-		struct sigaction ign;
-		struct sigaction oldHandler;
-		ign.sa_handler = SIG_IGN;
-		sigaction(SIGVTALRM, &ign, &oldHandler);
-
-		runningId = readyId.front();
-		threads[runningId]->state = RUNNING;
-		readyId.pop_front();
-		std::list<int>::iterator it;
-		it = sleepId.begin();
-	  	for(; it != sleepId.end(); it++){
-	  		threads[*it]->remainingSleepQuantum--;
-	 		if(threads[*it]->remainingSleepQuantum == 0){
-	 			eraseFromList(sleepId, *it);
-	  			readyId.push_back(*it);
-	  			threads[*it]->state = READY;
-	  		}
-	  	}
-		threads[runningId]->runningTime++;
-
-	  	resetTimer();
-	  	sigaction(SIGVTALRM, &oldHandler, NULL);
-
-	  	//long jump to runnig id thread
-	  	siglongjmp((threads[runningId]->env),1);
 }
 
 
@@ -461,27 +481,31 @@ int uthread_resume(int tid){
  * Return value: On success, return 0. On failure, return -1.
 */
 int uthread_sleep(int num_quantums){
+	if(num_quantums < 0){
+		std::cerr << "thread library error: negative number of sleep quantums\n";
+		return -1;
+	}
 	sigset_t set;
 	//blocked signals: SIGVTALRM
 	blockSIGVALM(set);
 
 	if (runningId == 0){
+		std::cerr << "thread library error: it's illegal to put the main thread to sleep\n";
 		unBlockSIGVALM(set);
 		return -1;
 	}
-	blockId.push_back(runningId);
-	threads[runningId]->state = BLOCKED;
-	int ret = sigsetjmp(threads[runningId]->env, 1);
+	sleepId.push_back(runningId);
+	threads[runningId]->state = SLEEPING;
+	threads[runningId]->remainingSleepQuantum = num_quantums;
+
+	/*int ret = sigsetjmp(threads[runningId]->env, 1);
 	if(ret == 1){
 		unBlockSIGVALM(set);
 		return 0;
-	}
-
-	//add to the sleeping list
-	threads[runningId]->remainingSleepQuantum = num_quantums;
-	sleepId.push_back(runningId);
+	}*/
 	unBlockSIGVALM(set);
-	timer_handler(SIGVTALRM);
+	blockRunningSchedule();
+
 
 	return 0;
 }

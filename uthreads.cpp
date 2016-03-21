@@ -126,17 +126,12 @@ void resetTimer(){
 
 
 void timer_handler(int sig){
-	//print(readyId);
-//	std::cout << "entered handler ending thread number:  " <<  runningId << std::endl;
-
 	//put the current running thread into the ready queue
 	int ret = sigsetjmp(threads[runningId]->env, 1);
 	if(ret == 1){
 		return;
 	}
 
-
-//	std::cout << "runnig time is: " <<  threads[runningId]->runningTime << std::endl;
 	struct sigaction ign;
 	struct sigaction oldHandler;
 	ign.sa_handler = SIG_IGN;
@@ -164,23 +159,17 @@ void timer_handler(int sig){
   	}
 
 	//TODO check if needed
-	//sigemptyset(&(threads[runningId]->env)->__saved_mask);
 	readyId.push_back(runningId);
 	threads[runningId]->state = READY;
 
 	runningId = readyId.front();
-	//std::cout << "size running id:" <<  readyId.size() << std::endl;
 	threads[runningId]->state = RUNNING;
 	readyId.pop_front();
-	//std::cout << "size running id:" <<  readyId.size() << std::endl;
-
 
 	threads[runningId]->runningTime++;
 
   	resetTimer();
   	sigaction(SIGVTALRM, &oldHandler, NULL);
-
-	//std::cout << "jumping to:" << runningId <<  std::endl;
 
   	//long jump to runnig id thread
   	siglongjmp((threads[runningId]->env),1);
@@ -276,7 +265,7 @@ int uthread_init(int quantum_usecs){
 	// Install timer_handler as the signal handler for SIGVTALRM.
 	sa.sa_handler = &timer_handler;
 	if (sigaction(SIGVTALRM, &sa,NULL) < 0) {
-		std::cout << "sigaction error." << std::endl; //TODO maybe remove print
+		std::cerr << "system error: sigaction error, can't update handler" << std::endl;
 		return -1;
 	}
 
@@ -302,11 +291,10 @@ int uthread_init(int quantum_usecs){
 
 	// Start a virtual timer. It counts down whenever this process is executing.
 	if (setitimer (ITIMER_VIRTUAL, &timer, NULL)) {
-		std::cout << "setitimer error." << std::endl; //TODO maybe remove print
+		std::cerr << "setitimer error: sigaction error, can't start timer" << std::endl;
 		return -1;
 	}
 
-	//std::cout << "starting timer and finishing init" << std::endl;
 	return 0;
 }
 
@@ -331,23 +319,20 @@ int uthread_spawn(void (*f)(void)){
 				UThread* newThread = new UThread(index, f);
 				threads[index] = newThread;
 				readyId.push_back(index);
-			//	std::cout << readyId.size() << std::endl;
 				unBlockSIGVALM(set);
-
-//				print(readyId);
-
 				return index;
 			}
 		}
 	}
 	catch(...){
+		std::cerr << "system error: uthread_spawn error, create new thread" << std::endl;
 		unBlockSIGVALM(set);
 		return -1;
 	}
 
+	std::cerr << "system error: uthread_spawn error, create new thread" << std::endl;
 	//unblocked signals: SIGVTALRM
 	unBlockSIGVALM(set);
-
 	return -1;
 }
 
@@ -370,6 +355,7 @@ int uthread_terminate(int tid){
 
 	if(threads[tid] == nullptr){
 		unBlockSIGVALM(set);
+		std::cerr << "thread library error: can't terminate not existing thread" << std::endl;
 		return -1;
 	}
 	else if(tid == 0){
@@ -407,11 +393,13 @@ int uthread_block(int tid){
 	blockSIGVALM(set);
 
 	if (tid == 0){
+		std::cerr << "thread library error: can't block the main thread" << std::endl;
 		unBlockSIGVALM(set);
 		return -1;
 	}
 	else if(threads[tid] == nullptr)
 	{
+		std::cerr << "thread library error: can't block not existing thread" << std::endl;
 		unBlockSIGVALM(set);
 		return -1;
 	}
@@ -457,6 +445,7 @@ int uthread_resume(int tid){
 
 	if(threads[tid] == nullptr){
 		unBlockSIGVALM(set);
+		std::cerr << "thread library error: can't resume not existing thread" << std::endl;
 		return -1;
 	}
 	if(threads[tid]->state == BLOCKED){
@@ -481,13 +470,14 @@ int uthread_resume(int tid){
  * Return value: On success, return 0. On failure, return -1.
 */
 int uthread_sleep(int num_quantums){
-	if(num_quantums < 0){
-		std::cerr << "thread library error: negative number of sleep quantums\n";
-		return -1;
-	}
 	sigset_t set;
 	//blocked signals: SIGVTALRM
 	blockSIGVALM(set);
+	if(num_quantums < 0){
+		std::cerr << "thread library error: negative number of sleep quantums" << std::endl;
+		unBlockSIGVALM(set);
+		return -1;
+	}
 
 	if (runningId == 0){
 		std::cerr << "thread library error: it's illegal to put the main thread to sleep\n";
@@ -522,6 +512,7 @@ int uthread_get_time_until_wakeup(int tid){
 	if(threads[tid] != nullptr){
 		return threads[tid]->remainingSleepQuantum;
 	}
+	std::cerr << "thread library error: thread not found" << std::endl;
 	return -1;
 }
 
@@ -559,12 +550,9 @@ int uthread_get_total_quantums(){
 */
 int uthread_get_quantums(int tid){
 	if(threads[tid] != nullptr){
-		//std::cout << "runnig time is: " <<  threads[tid]->runningTime << std::endl;
-//		print(readyId);
-//		std::cout << threads[tid]->runningTime << std::endl;
 		return threads[tid]->runningTime;
 	}
-	//std::cout << "runnig time is: - 1"  << std::endl;
+	std::cerr << "thread library error: thread not found" << std::endl;
 	return -1;
 }
 

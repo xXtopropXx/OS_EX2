@@ -24,6 +24,15 @@
 typedef void(*func)(void);
 typedef unsigned long address_t;
 
+
+void print(const std::list<int>& s) {
+	std::list<int>::const_iterator i;
+	for( i = s.begin(); i != s.end(); ++i)
+		std::cout << *i << ",";
+	std::cout << std::endl;
+}
+
+
 /* A translation is required when using an address of a variable.
    Use this as a black box in your code. */
 address_t translate_address(address_t addr)
@@ -35,6 +44,8 @@ address_t translate_address(address_t addr)
                  : "0" (addr));
     return ret;
 }
+
+
 
 class UThread{
 public:
@@ -59,7 +70,10 @@ public:
 		this->state = READY;
 		pc = (address_t)f;
 		sp = (address_t)stack + STACK_SIZE - sizeof(address_t);
-		sigsetjmp(env, 1);
+		int ret = sigsetjmp(env, 1);
+		if (ret == 1){
+			return;
+		}
 		(env->__jmpbuf)[JB_SP] = translate_address(sp);
 		(env->__jmpbuf)[JB_PC] = translate_address(pc);
 		sigemptyset(&env->__saved_mask);
@@ -72,8 +86,8 @@ static std::list<int> readyId;
 static std::list<int> blockId;
 static std::list<int> sleepId;
 static int runningId = 0;
-static int totalQuantums = 0;
-
+static int totalQuantums = 1;
+static int qunatumSize = 0;
 
 void eraseFromList(std::list<int>& list, int id){
 	std::list<int>::iterator it;
@@ -90,29 +104,26 @@ void eraseFromList(std::list<int>& list, int id){
 void resetTimer(){
 	struct itimerval time;
 	getitimer(ITIMER_VIRTUAL, &time);
-	time.it_value = time.it_interval;
+	time.it_value.tv_usec = qunatumSize;
 	setitimer(ITIMER_VIRTUAL, &time, NULL);
-
 }
 
 
 void timer_handler(int sig){
-	//std::cout << "entered handler ending thread number:  " <<  runningId << std::endl;
-
+//	std::cout << "entered handler ending thread number:  " <<  runningId << std::endl;
 
 	//put the current running thread into the ready queue
 	int ret = sigsetjmp(threads[runningId]->env, 1);
 	if(ret == 1){
 		return;
 	}
+	totalQuantums++;
 
-	threads[runningId]->runningTime++;
 //	std::cout << "runnig time is: " <<  threads[runningId]->runningTime << std::endl;
 	struct sigaction ign;
 	struct sigaction oldHandler;
 	ign.sa_handler = SIG_IGN;
 	sigaction(SIGVTALRM, &ign, &oldHandler);
-
 
 	//TODO check if needed
 	//sigemptyset(&(threads[runningId]->env)->__saved_mask);
@@ -124,7 +135,6 @@ void timer_handler(int sig){
 	threads[runningId]->state = RUNNING;
 	readyId.pop_front();
 	//std::cout << "size running id:" <<  readyId.size() << std::endl;
-
 	std::list<int>::iterator it;
 	it = sleepId.begin();
   	for(; it != sleepId.end(); it++){
@@ -135,8 +145,13 @@ void timer_handler(int sig){
   			threads[*it]->state = READY;
   		}
   	}
+	threads[runningId]->runningTime++;
+
   	resetTimer();
   	sigaction(SIGVTALRM, &oldHandler, NULL);
+
+	//std::cout << "jumping to:" << runningId <<  std::endl;
+
   	//long jump to runnig id thread
   	siglongjmp((threads[runningId]->env),1);
 }
@@ -198,7 +213,7 @@ void deleteAllThreads(){
  * Return value: On success, return 0. On failure, return -1.
 */
 int uthread_init(int quantum_usecs){
-
+	qunatumSize = quantum_usecs;
 	struct sigaction sa;
 	struct itimerval timer;
 
@@ -208,23 +223,23 @@ int uthread_init(int quantum_usecs){
 		std::cout << "sigaction error." << std::endl; //TODO maybe remove print
 		return -1;
 	}
-	int usec = quantum_usecs;
-	int sec = 0;
-	if(quantum_usecs >= SEC_TO_USEC){
-		usec = quantum_usecs % SEC_TO_USEC;
-		sec = (quantum_usecs - usec)/ SEC_TO_USEC;
-	}
+
 	// Configure the timer to expire after 1 sec... */
-	timer.it_value.tv_sec = sec;		// first time interval, seconds part
-	timer.it_value.tv_usec = usec;		// first time interval, microseconds part
+	timer.it_value.tv_sec = 0;		// first time interval, seconds part
+	timer.it_value.tv_usec = quantum_usecs;		// first time interval, microseconds part
 	// configure the timer to expire every quantum_usecs in micro-seconds after that.
-	timer.it_interval.tv_sec = sec;	// following time intervals, seconds part
-	timer.it_interval.tv_usec = usec;	// following time intervals, microseconds part
+	timer.it_interval.tv_sec = 0;	// following time intervals, seconds part
+	timer.it_interval.tv_usec = 0;	// following time intervals, microseconds part
 
 
 	UThread* newThread = new UThread();
 	threads[0] = newThread;
-	sigsetjmp(newThread->env, 1);
+	newThread->id = 0;
+	newThread->runningTime = 1;
+	int ret = sigsetjmp(newThread->env, 1);
+	if (ret == 1){
+		return 0;
+	}
 //	(newThread->env->__jmpbuf)[JB_SP] = translate_address(newThread->sp);
 //	(newThread->env->__jmpbuf)[JB_PC] = translate_address(newThread->pc);
 	sigemptyset(&newThread->env->__saved_mask);
@@ -234,7 +249,8 @@ int uthread_init(int quantum_usecs){
 		std::cout << "setitimer error." << std::endl; //TODO maybe remove print
 		return -1;
 	}
-	std::cout << "starting timer and finishing init" << std::endl;
+
+	//std::cout << "starting timer and finishing init" << std::endl;
 	return 0;
 }
 
@@ -262,10 +278,12 @@ int uthread_spawn(void (*f)(void)){
 				UThread* newThread = new UThread(index, f);
 				threads[index] = newThread;
 				readyId.push_back(index);
-				std::cout << readyId.size() << std::endl;
+			//	std::cout << readyId.size() << std::endl;
 				sigemptyset(&set);
 				sigaddset(&set, SIGVTALRM);
 				sigprocmask(SIG_UNBLOCK, &set, NULL);
+
+//				print(readyId);
 
 				return index;
 			}
@@ -302,7 +320,7 @@ int uthread_terminate(int tid){
 	sigaddset(&set, SIGVTALRM);
 	sigprocmask(SIG_BLOCK, &set, NULL);
 
-	if(threads[tid] != nullptr){
+	if(threads[tid] == nullptr){
 		return -1;
 	}
 	else if(tid == 0){
@@ -492,9 +510,11 @@ int uthread_get_total_quantums(){
 int uthread_get_quantums(int tid){
 	if(threads[tid] != nullptr){
 		//std::cout << "runnig time is: " <<  threads[tid]->runningTime << std::endl;
+//		print(readyId);
+//		std::cout << threads[tid]->runningTime << std::endl;
 		return threads[tid]->runningTime;
 	}
-	std::cout << "runnig time is: - 1"  << std::endl;
+	//std::cout << "runnig time is: - 1"  << std::endl;
 	return -1;
 }
 

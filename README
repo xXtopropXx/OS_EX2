@@ -1,41 +1,43 @@
 itaygera, nadavost
-Student Itay Gera (208523274), Student Nadav Ostrovsky (206157877)
+Itay Gera (208523274), Nadav Ostrovsky (206157877)
 EX: 2
 
 FILES:
-uthreads.cpp -- This file contains the implementation of the given file uthreads.h.
-				it contains the implementation of a library which manage user level threads.
-				a programmer can use this lib in order to run his code with several
-				(user level) threads.
+uthreads.cpp -- This file contains the implementation of the given file
+		uthreads.h. it contains the implementation of a library
+		which manage user level threads. a programmer can use this
+		lib in order to run his code with several (user level) threads.
 
 REMARKS:
 
 ANSWERS:
 
 Q1:
-	the advantages of several processes instead of several threads is: we can achieve better security,
-	because the processes are more separated than the threads. If one process terminates for some reason
-	the others will still be running.
-	but the disadvantaged is that we can't share memory between processes.
+	the advantages of several processes instead of several threads is: we
+	can achieve better security, because the processes are more separated
+	than the threads. If one process terminates for some reason the
+	others will still be running. but the disadvantaged is that we can't
+	share memory between processes.
 
 Q2:
-	c. The OS receives an external interrupts from the keyboard, when writing the kill command
-		on the shell, when the user presses the enter key, the command is being executed as an
-		internal interrupt, which sends a SIGTERM signal to the desired process.
-		The process has a default handler to this signal, which closes the program,
-		in a controlled manner. If this fails, a SIGKILL command is sent by the OS,
-		which then aggressively stops the process. 
+	c. The OS receives an external interrupts from the keyboard, when
+		writing the kill command on the shell, when the user presses
+		the enter key, the command is being executed as an internal
+		interrupt, which sends a SIGTERM signal to the desired process.
+		The process has a default handler to this signal, which closes
+		the program, in a controlled manner. If this fails, a SIGKILL
+		command is sent by the OS, then aggressively stops the process. 
 
 Q3:
-	real time is the  time as it exists in the “real” physical world, in such that
-	using it corresponds to the "world's" time instead of the program starting time.
-	“virtual time” is the sense of time inside an application.
-	An example of real time is application which should display the current time.
-	An example of virtual time is user level threads, or a application that makes
-	a noise every 3 seconds.
+	real time is the  time as it exists in the “real” physical world, in
+	such that using it corresponds to the "world's" time instead of the
+	program starting time. “virtual time” is the sense of time inside an
+	application. An example of real time is application which should
+	display the current time. An example of virtual time is user level
+	threads, or a application that makes a noise every 3 seconds.
 
 Q4:
 	a. i. Stack -- the child gets a copy of the parent's stack.
 	b. pipe creates an interprocess communication channel,
-	it allows to communication between process.	it is needed in order to communicate between
-	processes, and to transfer data between them.
+	it allows to communication between process. it is needed in order
+	to communicate between processes, and to transfer data between them.

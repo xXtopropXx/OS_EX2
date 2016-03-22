@@ -1,5 +1,7 @@
 /**
- *
+ *	EX2
+ *	itaygera
+ *	nadavost
  */
 
 #include "uthreads.h"
@@ -26,6 +28,7 @@ typedef unsigned long address_t;
 
 /*
  * print the content of a given list
+ * for debugging
  */
 void print(const std::list<int>& s) {
 	std::list<int>::const_iterator i;
@@ -50,7 +53,7 @@ address_t translate_address(address_t addr) {
  * @param sigset_t& set: the set that will
  * assigned and blocked
  */
-void unBlockSIGVALM(sigset_t& set) {
+void unBlockAlarmSignal(sigset_t& set) {
 	//unblocked signals: SIGVTALRM
 	sigemptyset(&set);
 	sigaddset(&set, SIGVTALRM);
@@ -60,7 +63,7 @@ void unBlockSIGVALM(sigset_t& set) {
 /*
  * blocking a signal from the type: SIGVALM
  */
-void blockSIGVALM(sigset_t& set) {
+void blockAlarmSignal(sigset_t& set) {
 	//blocked signals: SIGVTALRM
 	sigemptyset(&set);
 	sigaddset(&set, SIGVTALRM);
@@ -105,7 +108,6 @@ public:
 };
 
 static UThread* threads[MAX_THREAD_NUM];
-//sigjmp_buf env[MAX_THREAD_NUM];
 static std::list<int> readyId;
 static std::list<int> blockId;
 static std::list<int> sleepId;
@@ -113,6 +115,9 @@ static int runningId = 0;
 static int totalQuantums = 1;
 static int qunatumSize = 0;
 
+/*
+ * delete a thread from a given list
+ */
 void eraseFromList(std::list<int>& list, int id) {
 	std::list<int>::iterator it;
 	it = list.begin();
@@ -124,6 +129,9 @@ void eraseFromList(std::list<int>& list, int id) {
 	}
 }
 
+/*
+ * reset the timer at the end of each thread switching
+ */
 void resetTimer() {
 	struct itimerval time;
 	getitimer(ITIMER_VIRTUAL, &time);
@@ -131,73 +139,36 @@ void resetTimer() {
 	setitimer(ITIMER_VIRTUAL, &time, NULL);
 }
 
-void timer_handler(int sig) {
-	//put the current running thread into the ready queue
-	int ret = sigsetjmp(threads[runningId]->env, 1);
-	if (ret == 1) {
-		return;
-	}
-
-	struct sigaction ign;
-	struct sigaction oldHandler;
-	ign.sa_handler = SIG_IGN;
-	sigaction(SIGVTALRM, &ign, &oldHandler);
-
-	totalQuantums++;
-	std::list<int>::iterator iter = sleepId.begin();
-	while (iter != sleepId.end()) {
-
-		if (threads[*iter]->remainingSleepQuantum == 0) {
-			int toWake = *iter;
-			++iter;
-			eraseFromList(sleepId, toWake); // alternatively, i = items.erase(i);
-			readyId.push_back(toWake);
-			threads[toWake]->state = READY;
-
-		} else {
-			threads[*iter]->remainingSleepQuantum--;
-			++iter;
-		}
-	}
-
-
-	readyId.push_back(runningId);
-	threads[runningId]->state = READY;
-
-	runningId = readyId.front();
-	threads[runningId]->state = RUNNING;
-	readyId.pop_front();
-
-	threads[runningId]->runningTime++;
-
-	resetTimer();
-	sigaction(SIGVTALRM, &oldHandler, NULL);
-
-	//long jump to runnig id thread
-	siglongjmp((threads[runningId]->env), 1);
-}
-
-void blockRunningSchedule() {
+/*
+ * The SIGVTALM signal handler - The thread swapper
+ */
+void switchThreads(int sig) {
+	//Unwanted warning - left in order to give us extensibility in the future
+	(void) sig;
+	//put the current running thread into the ready queue if not terminated
 	if (threads[runningId] != nullptr) {
 		int ret = sigsetjmp(threads[runningId]->env, 1);
 		if (ret == 1) {
 			return;
 		}
 	}
+	//ignore SIGVTALRM signal
 	struct sigaction ign;
 	struct sigaction oldHandler;
 	ign.sa_handler = SIG_IGN;
 	sigaction(SIGVTALRM, &ign, &oldHandler);
+
 	totalQuantums++;
 
-
+	//Check the sleeping threads and handle them
 	std::list<int>::iterator iter = sleepId.begin();
 	while (iter != sleepId.end()) {
 
 		if (threads[*iter]->remainingSleepQuantum == 0) {
 			int toWake = *iter;
 			++iter;
-			eraseFromList(sleepId, toWake); // alternatively, i = items.erase(i);
+			// alternatively, i = items.erase(i);
+			eraseFromList(sleepId, toWake);
 			readyId.push_back(toWake);
 			threads[toWake]->state = READY;
 
@@ -207,18 +178,32 @@ void blockRunningSchedule() {
 		}
 	}
 
+	// if thread was not blocked, terminated or got sleep,
+	// add it to  the ready list
+	if (threads[runningId] != nullptr) {
+		if (threads[runningId]->state == RUNNING) {
+			readyId.push_back(runningId);
+			threads[runningId]->state = READY;
+		}
+	}
+	//get the next thread
 	runningId = readyId.front();
 	threads[runningId]->state = RUNNING;
 	readyId.pop_front();
-	threads[runningId]->runningTime++;
 
+	threads[runningId]->runningTime++;
+	//reset the timer in order to give the next thread a full quantum
 	resetTimer();
+	//stop ignoring the SIGVTALRM
 	sigaction(SIGVTALRM, &oldHandler, NULL);
 
-	//long jump to runnig id thread
+	//long jump to the next id thread
 	siglongjmp((threads[runningId]->env), 1);
 }
 
+/*
+ * delete a single thread from memory and process
+ */
 void deleteThread(int tid) {
 
 	if (threads[tid]->state == BLOCKED) {
@@ -233,6 +218,9 @@ void deleteThread(int tid) {
 
 }
 
+/*
+ * delete all threads when calling terminate(0)
+ */
 void deleteAllThreads() {
 	int i = 0;
 	for (; i < MAX_THREAD_NUM; i++) {
@@ -256,33 +244,35 @@ int uthread_init(int quantum_usecs) {
 	struct itimerval timer;
 
 	// Install timer_handler as the signal handler for SIGVTALRM.
-	sa.sa_handler = &timer_handler;
+	sa.sa_handler = &switchThreads;
 	if (sigaction(SIGVTALRM, &sa, NULL) < 0) {
 		std::cerr << "system error: sigaction error, can't update handler"
 				<< std::endl;
 		return -1;
 	}
+	// first time interval, seconds part
+	timer.it_value.tv_sec = 0;
+	// first time interval, microseconds part
+	timer.it_value.tv_usec = quantum_usecs;
 
-	// Configure the timer to expire after 1 sec... */
-	timer.it_value.tv_sec = 0;		// first time interval, seconds part
-	timer.it_value.tv_usec = quantum_usecs;	// first time interval, microseconds part
-	// configure the timer to expire every quantum_usecs in micro-seconds after that.
-	timer.it_interval.tv_sec = 0;	// following time intervals, seconds part
-	timer.it_interval.tv_usec = 0;// following time intervals, microseconds part
+	timer.it_interval.tv_sec = 0;
+	timer.it_interval.tv_usec = 0;
 
+	//create the main thread object
 	UThread* newThread = new UThread();
 	threads[0] = newThread;
 	newThread->id = 0;
 	newThread->runningTime = 1;
+	newThread->state = RUNNING;
 	int ret = sigsetjmp(newThread->env, 1);
 	if (ret == 1) {
 		return 0;
 	}
 	sigemptyset(&newThread->env->__saved_mask);
 
-	// Start a virtual timer. It counts down whenever this process is executing.
+	// Start a virtual timer. Counts down whenever this process is executing.
 	if (setitimer(ITIMER_VIRTUAL, &timer, NULL)) {
-		std::cerr << "setitimer error: sigaction error, can't start timer"
+		std::cerr << "system error: setitimer error, can't start timer"
 				<< std::endl;
 		return -1;
 	}
@@ -302,7 +292,7 @@ int uthread_init(int quantum_usecs) {
  */
 int uthread_spawn(void (*f)(void)) {
 	sigset_t set;
-	blockSIGVALM(set);
+	blockAlarmSignal(set);
 
 	try {
 		for (int index = 0; index < MAX_THREAD_NUM; index++) {
@@ -311,21 +301,22 @@ int uthread_spawn(void (*f)(void)) {
 				UThread* newThread = new UThread(index, f);
 				threads[index] = newThread;
 				readyId.push_back(index);
-				unBlockSIGVALM(set);
+				unBlockAlarmSignal(set);
 				return index;
 			}
 		}
 	} catch (...) {
-		std::cerr << "system error: uthread_spawn error, create new thread"
+		std::cerr
+				<< "system error: uthread_spawn error, can't create new thread"
 				<< std::endl;
-		unBlockSIGVALM(set);
+		unBlockAlarmSignal(set);
 		return -1;
 	}
 
-	std::cerr << "system error: uthread_spawn error, create new thread"
+	std::cerr << "system error: uthread_spawn error, can't create new thread"
 			<< std::endl;
 	//unblocked signals: SIGVTALRM
-	unBlockSIGVALM(set);
+	unBlockAlarmSignal(set);
 	return -1;
 }
 
@@ -343,11 +334,12 @@ int uthread_spawn(void (*f)(void)) {
 int uthread_terminate(int tid) {
 	sigset_t set;
 	//blocked signals: SIGVTALRM
-	blockSIGVALM(set);
+	blockAlarmSignal(set);
 
 	if (threads[tid] == nullptr) {
-		unBlockSIGVALM(set);
-		std::cerr << "thread library error: can't terminate not existing thread"
+		unBlockAlarmSignal(set);
+		std::cerr
+				<< "thread library error: can't terminate non existing thread"
 				<< std::endl;
 		return -1;
 	} else if (tid == 0) {
@@ -356,14 +348,14 @@ int uthread_terminate(int tid) {
 	} else if (threads[tid]->state == RUNNING) {
 		delete threads[tid];
 		threads[tid] = nullptr;
-		unBlockSIGVALM(set);
-		blockRunningSchedule();
+		unBlockAlarmSignal(set);
+		switchThreads(SIGVTALRM);
 		return 0;
 	}
 	deleteThread(tid);
 
 	//unblocked signals: SIGVTALRM
-	unBlockSIGVALM(set);
+	unBlockAlarmSignal(set);
 
 	return 0;
 }
@@ -380,41 +372,43 @@ int uthread_terminate(int tid) {
 int uthread_block(int tid) {
 	sigset_t set;
 	//blocked signals: SIGVTALRM
-	blockSIGVALM(set);
+	blockAlarmSignal(set);
 
 	if (tid == 0) {
-		std::cerr << "thread library error: can't block the main thread"
+		std::cerr << "thread library error: can't block main thread"
 				<< std::endl;
-		unBlockSIGVALM(set);
+		unBlockAlarmSignal(set);
 		return -1;
-	} else if (threads[tid] == nullptr) {
-		std::cerr << "thread library error: can't block not existing thread"
+	}
+	else if (threads[tid] == nullptr) {
+		std::cerr << "thread library error: can't block non existing thread"
 				<< std::endl;
-		unBlockSIGVALM(set);
+		unBlockAlarmSignal(set);
 		return -1;
-	} else if (threads[tid]->state == BLOCKED || threads[tid]->state == SLEEPING) {
-		unBlockSIGVALM(set);
+	}
+	else if(threads[tid]->state == BLOCKED || threads[tid]->state == SLEEPING){
+		unBlockAlarmSignal(set);
 		return 0;
-	} else if (tid == runningId) {
+	}
+	else if (tid == runningId) {
 		blockId.push_back(tid);
 		threads[tid]->state = BLOCKED;
 		int ret = sigsetjmp(threads[runningId]->env, 1);
 		if (ret == 1) {
-			unBlockSIGVALM(set);
+			//unBlockSIGVALM(set);
 			return 0;
 		}
 
-		unBlockSIGVALM(set);
-		blockRunningSchedule();
+		unBlockAlarmSignal(set);
+		switchThreads(SIGVTALRM);
 		return 0;
 	}
 	eraseFromList(readyId, tid);
-	print(readyId);
 	blockId.push_back(tid);
 	threads[tid]->state = BLOCKED;
 
 	//unblocked signals: SIGVTALRM
-	unBlockSIGVALM(set);
+	unBlockAlarmSignal(set);
 	return 0;
 }
 
@@ -428,10 +422,10 @@ int uthread_block(int tid) {
 int uthread_resume(int tid) {
 	sigset_t set;
 	//blocked signals: SIGVTALRM
-	blockSIGVALM(set);
+	blockAlarmSignal(set);
 
 	if (threads[tid] == nullptr) {
-		unBlockSIGVALM(set);
+		unBlockAlarmSignal(set);
 		std::cerr << "thread library error: can't resume not existing thread"
 				<< std::endl;
 		return -1;
@@ -443,7 +437,7 @@ int uthread_resume(int tid) {
 	}
 
 	//unblocked signals: SIGVTALRM
-	unBlockSIGVALM(set);
+	unBlockAlarmSignal(set);
 
 	return 0;
 }
@@ -458,34 +452,29 @@ int uthread_resume(int tid) {
  */
 int uthread_sleep(int num_quantums) {
 	sigset_t set;
-	//blocked signals: SIGVTALRM
-	blockSIGVALM(set);
+	blockAlarmSignal(set);
 	if (num_quantums < 0) {
 		std::cerr << "thread library error: negative number of sleep quantums"
 				<< std::endl;
-		unBlockSIGVALM(set);
+		unBlockAlarmSignal(set);
 		return -1;
 	}
 
 	if (runningId == 0) {
 		std::cerr
-				<< "thread library error: it's illegal to put the main thread to sleep"
+				<< "thread library error: it's illegal "
+				<< "to put the main thread to sleep"
 				<< std::endl;
-		unBlockSIGVALM(set);
+
+		unBlockAlarmSignal(set);
 		return -1;
 	}
 	sleepId.push_back(runningId);
 	threads[runningId]->state = SLEEPING;
 	threads[runningId]->remainingSleepQuantum = num_quantums;
 
-	/*int ret = sigsetjmp(threads[runningId]->env, 1);
-	 if(ret == 1){
-	 unBlockSIGVALM(set);
-	 return 0;
-	 }*/
-	unBlockSIGVALM(set);
-	blockRunningSchedule();
-
+	unBlockAlarmSignal(set);
+	switchThreads(SIGVTALRM);
 	return 0;
 }
 
@@ -531,7 +520,8 @@ int uthread_get_total_quantums() {
  * increase this value by 1 (so if the thread with ID tid is in RUNNING state
  * when this function is called, include also the current quantum). If no
  * thread with ID tid exists it is considered as an error.
- * Return value: On success, return the number of quantums of the thread with ID tid. On failure, return -1.
+ * Return value: On success, return the number of quantums of the thread with
+ *  ID tid. On failure, return -1.
  */
 int uthread_get_quantums(int tid) {
 	if (threads[tid] != nullptr) {

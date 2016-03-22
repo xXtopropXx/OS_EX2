@@ -1,49 +1,41 @@
 itaygera, nadavost
 Student Itay Gera (208523274), Student Nadav Ostrovsky (206157877)
-EX: 1
+EX: 2
 
 FILES:
-osm.c -- The measuring times library c file
-osm.h -- The measuring times library header.
+uthreads.cpp -- This file contains the implementation of the given file uthreads.h.
+				it contains the implementation of a library which manage user level threads.
+				a programmer can use this lib in order to run his code with several
+				(user level) threads.
 
 REMARKS:
 
 ANSWERS:
 
 Q1:
-Task 1:
-The WhatIDo program is pretty simple, and it does the following operations:
-It takes one argument of type char, if it gets no arguments or more then one argument it prints
-"The program should receive a single argument. Exiting."
-and afterwards it prints ": Success\n".
-
-If it gets one argument it does the following:
-1.Makes directory Welcome
-2.Makes directory Welcome/To
-3.Creates a file named OS in Welcome/To/
-4.Using fstat() to get information about the file an mapping the file to the memory using mmap().
-5.It writes "If you didn't read the course guidelines..." to the OS file- And we did read it :)
-6.Closes the file and Unmapping the file from memory.
-7.Unlinks the file thus removing it and removes the directories.
-
+	the advantages of several processes instead of several threads is: we can achieve better security,
+	because the processes are more separated than the threads. If one process terminates for some reason
+	the others will still be running.
+	but the disadvantaged is that we can't share memory between processes.
 
 Q2:
-Task 2:
-the main principle that guided us while writing the code was to start and to stop the time counting
-right before and after the part of the code that should be timed.
-now we will describe important details in the functions:
-1) osm_operation_time - in each loop we preformed 5 different math actions, in order reduce weight
- of the loop itself,
-and they were different from each other, to avoid, optimizations that the computer might preform.
-2) osm_function_time - like the previous function also in this one, in each loop we preformed
- 5 calls of the empty function,
-in order reduce weight of the loop itself.
-3) osm_disk_time - we preformed the operations: fopen, fputs, fflush, fclose. we choose to
- use this certain sequence,
-in order to make each operation and iteration independent from one another.
-this is a tipical run that we had performed over our own computer:
-instruction: 0.600000, function: 1.800000, trap: 233.000000, disk: 27714.500000.
-we can see here that the simple operations, like calling a function, is very fast. but the
- last two operations, trap and disk access
-are relatively very slow. It makes sense because they involve a lot of different operations
- to be completed, or external mechanical actions.
+	c. The OS receives an external interrupts from the keyboard, when writing the kill command
+		on the shell, when the user presses the enter key, the command is being executed as an
+		internal interrupt, which sends a SIGTERM signal to the desired process.
+		The process has a default handler to this signal, which closes the program,
+		in a controlled manner. If this fails, a SIGKILL command is sent by the OS,
+		which then aggressively stops the process. 
+
+Q3:
+	real time is the  time as it exists in the “real” physical world, in such that
+	using it corresponds to the "world's" time instead of the program starting time.
+	“virtual time” is the sense of time inside an application.
+	An example of real time is application which should display the current time.
+	An example of virtual time is user level threads, or a application that makes
+	a noise every 3 seconds.
+
+Q4:
+	a. i. Stack -- the child gets a copy of the parent's stack.
+	b. pipe creates an interprocess communication channel,
+	it allows to communication between process.	it is needed in order to communicate between
+	processes, and to transfer data between them.
